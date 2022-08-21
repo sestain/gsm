@@ -11,7 +11,7 @@
 #
 */
 
-//#include <kernel.h>
+#include <kernel.h>
 
 #define make_display_magic_number(dh, dw, magv, magh, dy, dx) \
         (((u64)(dh)<<44) | ((u64)(dw)<<32) | ((u64)(magv)<<27) | \
