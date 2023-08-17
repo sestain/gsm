@@ -2,11 +2,12 @@
 
 PACKAGE = GSM
 EE_BIN = $(PACKAGE).ELF
-EE_OBJS := gsm_engine.o gsm_api.o
+EE_OBJS = main.o gsm_engine.o gsm_api.o dve_reg.o
 
-EE_LDFLAGS =  -nostartfiles -Tlinkfile
+EE_INCS := -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -I$(PS2SDK)/ports/include -Iinclude -I.
+EE_CFLAGS = -D_EE -Os -G0 -Wall $(EE_INCS)
 
-#EE_LDFLAGS += -Xlinker -Map -Xlinker 'uncompressed $(PACKAGE).map'
+EE_LDFLAGS = -nostartfiles -nostdlib -Tlinkfile -L$(PS2SDK)/ee/lib -s
 
 all: $(EE_BIN)
 	 rm -f 'uncompressed $(PACKAGE).ELF'
@@ -14,31 +15,10 @@ all: $(EE_BIN)
 	 ee-strip 'uncompressed $(PACKAGE).ELF'
 	 ps2-packer 'uncompressed $(PACKAGE).ELF' $(PACKAGE).ELF > /dev/null
 
-dump:
-	ee-objdump -D 'uncompressed $(PACKAGE).ELF' > $(PACKAGE).dump
-	ps2client netdump
-
-test:
-	ps2client -h $(PS2_IP) reset
-	ps2client -h $(PS2_IP) execee host:'uncompressed $(PACKAGE).ELF'
-
-run:
-	ps2client -h $(PS2_IP) reset
-	ps2client -h $(PS2_IP) execee host:$(PACKAGE).ELF
-
-line:
-	ee-addr2line -e 'uncompressed $(PACKAGE).ELF' $(ADDR)
-
-reset:
-	ps2client -h $(PS2_IP) reset
-
 clean:
 	rm -f *.ELF *.o *.a *.s *.i *.map
 
 rebuild:clean all
-
-release:rebuild
-	rm -f 'uncompressed $(PACKAGE).ELF' *.o *.a *.s *.i *.map
 
 include $(PS2SDK)/samples/Makefile.pref
 include $(PS2SDK)/samples/Makefile.eeglobal

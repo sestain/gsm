@@ -1,10 +1,32 @@
+/*
+	Copyright 2009-2010, Ifcaro, jimmikaelkael & Polo
+	Copyright 2006-2008 Polo
+	Licenced under Academic Free License version 3.0
+	Review OPNPS2LD README & LICENSE files for further details.
 
+	Copyright 2001-2004, ps2dev - http://www.ps2dev.org
+	Licenced under Academic Free License version 2.0
+	Review ps2sdk README & LICENSE files for further details.
+
+	Standard linkfile
+*/
 
 ENTRY(_start);
 
-SECTIONS {
+MEMORY {
+	ram84	: ORIGIN = 0x00084000, LENGTH = 77312 /* 0x00084000 - 0x00096E00: free */
+	stack	: ORIGIN = 0x00096E00, LENGTH = 512   /* 0x00096E00 - 0x00097000: free */
+	modules	: ORIGIN = 0x00097000, LENGTH = 228K  /* 0x00097000 - 0x000D0000: free */
+	ramD0	: ORIGIN = 0x000D0000, LENGTH = 192K  /* 0x000D0000 - 0x00100000: usually free, but some games use it. */
+}
 
-	.text 0x00100000: { 
+PHDRS {
+  text PT_LOAD;
+}
+
+
+SECTIONS {
+	.text : {
 		_ftext = . ;
 		*(.text)
 		*(.text.*)
@@ -12,12 +34,12 @@ SECTIONS {
 		KEEP(*(.init))
 		KEEP(*(.fini))
 		QUAD(0)
-	}
+	} >ram84 :text
 
 	PROVIDE(_etext = .);
 	PROVIDE(etext = .);
 
-	.reginfo : { *(.reginfo) }
+	.reginfo : { *(.reginfo) } >ram84
 
 	/* Global/static constructors and deconstructors. */
 	.ctors ALIGN(16): {
@@ -25,20 +47,20 @@ SECTIONS {
 		KEEP(*(EXCLUDE_FILE(*crtend*.o) .ctors))
 		KEEP(*(SORT(.ctors.*)))
 		KEEP(*(.ctors))
-	}
+	} >ram84
 	.dtors ALIGN(16): {
 		KEEP(*crtbegin*.o(.dtors))
 		KEEP(*(EXCLUDE_FILE(*crtend*.o) .dtors))
 		KEEP(*(SORT(.dtors.*)))
 		KEEP(*(.dtors))
-	}
+	} >ram84
 
 	/* Static data.  */
 	.rodata ALIGN(128): {
 		*(.rodata)
 		*(.rodata.*)
 		*(.gnu.linkonce.r*)
-	}
+	} >ram84
 
 	.data ALIGN(128): {
 		_fdata = . ;
@@ -46,20 +68,20 @@ SECTIONS {
 		*(.data.*)
 		*(.gnu.linkonce.d*)
 		SORT(CONSTRUCTORS)
-	}
+	} >ram84
 
-	.rdata ALIGN(128): { *(.rdata) }
-	.gcc_except_table ALIGN(128): { *(.gcc_except_table) }
+	.rdata ALIGN(128): { *(.rdata) } >ram84
+	.gcc_except_table ALIGN(128): { *(.gcc_except_table) } >ram84
 
 	_gp = ALIGN(128) + 0x7ff0;
-	.lit4 ALIGN(128): { *(.lit4) }
-	.lit8 ALIGN(128): { *(.lit8) }
+	.lit4 ALIGN(128): { *(.lit4) } >ram84
+	.lit8 ALIGN(128): { *(.lit8) } >ram84
 
 	.sdata ALIGN(128): {
 		*(.sdata)
 		*(.sdata.*)
 		*(.gnu.linkonce.s*)
-	}
+	} >ram84
 
 	_edata = .;
 	PROVIDE(edata = .);
@@ -71,37 +93,21 @@ SECTIONS {
 		*(.sbss.*)
 		*(.gnu.linkonce.sb*)
 		*(.scommon)
-	}
+	} >ram84
 
 	.bss ALIGN(128) : {
 		*(.bss)
 		*(.bss.*)
 		*(.gnu.linkonce.b*)
 		*(COMMON)
-	}
+	} >ram84
 	_end_bss = .;
-
-	_end = . ;
-	PROVIDE(end = .);
 
 	/* Symbols needed by crt0.s.  */
 	PROVIDE(_heap_size = -1);
-	PROVIDE(_stack = -1);
-	PROVIDE(_stack_size = 128 * 1024);
+	PROVIDE(_stack = .);
+	PROVIDE(_stack_size = 0x00097000 - _stack);	/* Any remaining space up to the module storage region, is available for the stack. */
+
+	_end = _stack + _stack_size ;
+	PROVIDE(end = _end);
 }
-
-SECTIONS {
-
-	.gsm_engine 0x00080000: {
-		_ftext = . ;
-		*(.gsm_engine)
-		*(.gsm_engine.*)
-		*(.gnu.linkonce.t*)
-		QUAD(0)
-	}
-
-	PROVIDE(_egsm_engine = .);
-	PROVIDE(egsm_engine = .);
-
-}
-

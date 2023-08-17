@@ -4,328 +4,211 @@
 #-------------------------------------------------------------------------------------------------------------
 # Copyright 2009, 2010, 2011 doctorxyz & dlanor
 # Copyright 2011, 2012 doctorxyz, SP193 & reprep
-# Copyright 2013 doctorxyz
-# Copyright 2022 Sestain
+# Copyright 2013 Bat Rastard
+# Copyright 2014, 2015, 2016 doctorxyz
 # Licenced under Academic Free License version 2.0
 # Review LICENSE file for further details.
 #
 */
 
+#include <tamtypes.h>
 #include <kernel.h>
+#include <syscallnr.h>
 
-#define make_display_magic_number(dh, dw, magv, magh, dy, dx) \
-        (((u64)(dh)<<44) | ((u64)(dw)<<32) | ((u64)(magv)<<27) | \
-         ((u64)(magh)<<23) | ((u64)(dy)<<12)   | ((u64)(dx)<<0)     )
+#include "gsm_api.h"
+#include "dve_reg.h"
 
-#define MAKE_J(func)		(u32)( (0x02 << 26) | (((u32)func) / 4) )	// Jump (MIPS instruction)
+#define MAKE_J(func) (u32)((0x02 << 26) | (((u32)func) / 4)) // Jump (MIPS instruction)
+#define NOP          0x00000000                              // No Operation (MIPS instruction)
 
-// GS Registers
-#define GS_BGCOLOUR *((volatile unsigned long int*)0x120000E0)
+extern void (*Old_SetGsCrt)(short int interlace, short int mode, short int ffmd);
 
-// VMODE TYPES
-#define PS1_VMODE	1
-#define HDTV_VMODE	3
+// Taken from gsKit
+// NTSC
+#define GS_MODE_NTSC 0x02
+// PAL
+#define GS_MODE_PAL  0x03
 
-/// Non-Interlaced Mode
-#define GS_NONINTERLACED 0x00
-/// Interlaced Mode
-#define GS_INTERLACED 0x01
-
-/// Field Mode - Reads Every Other Line
-#define GS_FIELD 0x00
-/// Frame Mode - Reads Every Line
-#define GS_FRAME 0x01
-
-/// DTV 480 Progressive Scan (720x480)
-#define GS_MODE_DTV_480P  0x50
-/// DTV 1080 Interlaced (1920x1080)
-#define GS_MODE_DTV_1080I 0x51
-/// DTV 720 Progressive Scan (1280x720)
-#define GS_MODE_DTV_720P  0x52
-/// DTV 576 Progressive Scan (720x576)
-#define GS_MODE_DTV_576P  0x53
-/// DTV 1080 Progressive Scan (1920x1080)
-#define GS_MODE_DTV_1080P  0x54
-
-// Prototypes for External Functions
-#define _GSM_ENGINE_ __attribute__((section(".gsm_engine")))		// Resident section
-
-extern void *Old_SetGsCrt _GSM_ENGINE_;
-
-extern u32 Target_INTERLACE _GSM_ENGINE_;
-extern u32 Target_MODE _GSM_ENGINE_;
-extern u32 Target_FFMD _GSM_ENGINE_;
-
-extern u64 Target_SMODE2 _GSM_ENGINE_;
-extern u64 Target_DISPLAY1 _GSM_ENGINE_;
-extern u64 Target_DISPLAY2 _GSM_ENGINE_;
-extern u64 Target_SYNCV _GSM_ENGINE_;
-
-extern u8 automatic_adaptation _GSM_ENGINE_;
-extern u8 DISPLAY_fix _GSM_ENGINE_;
-extern u8 SMODE2_fix _GSM_ENGINE_;
-extern u8 SYNCV_fix _GSM_ENGINE_;
-extern u8 skip_videos_fix _GSM_ENGINE_;
-
-extern u32 X_offset _GSM_ENGINE_;
-extern u32 Y_offset _GSM_ENGINE_;
-
-extern void Hook_SetGsCrt() _GSM_ENGINE_;
-extern void GSHandler() _GSM_ENGINE_;
-
-typedef struct predef_vmode_struct {
-	u8	category;
-	char desc[34];
-	u8	interlace;
-	u8	mode;
-	u8	ffmd;
-	u64	display;
-	u64	syncv;
-} predef_vmode_struct;
-
-// Pre-defined vmodes 
-// Some of following vmodes gives BSOD and/or freezing, depending on the console BIOS version, TV/Monitor set, PS2 cable (composite, component, VGA, ...)
-// Therefore there are many variables involved here that can lead us to success or fail depending on the circumstances above mentioned.
-//
-//	category	description								interlace			mode			 	ffmd	   	display							dh		dw		magv	magh	dy		dx		syncv
-//	--------	-----------								---------			----			 	----		----------------------------	--		--		----	----	--		--		-----
-static const predef_vmode_struct predef_vmode[8] = {
-	{  PS1_VMODE, "PS1 NTSC (HDTV 480p @60Hz)     ",	GS_NONINTERLACED,	GS_MODE_DTV_480P,	GS_FRAME,	(u64)make_display_magic_number(	 255,	2559,	0,		1,		 12,	736),	0x00C78C0001E00006},
-	{  PS1_VMODE, "PS1 PAL (HDTV 576p @50Hz)      ",	GS_NONINTERLACED,	GS_MODE_DTV_576P,	GS_FRAME,	(u64)make_display_magic_number(	 255,	2559,	0,		1,		 23,	756),	0x00A9000002700005},
-	{  HDTV_VMODE,"HDTV 480p @60Hz                ",	GS_NONINTERLACED,	GS_MODE_DTV_480P,	GS_FRAME, 	(u64)make_display_magic_number(	 479,	1279,	0,		1,		 51,	308),	0x00C78C0001E00006},
-	{  HDTV_VMODE,"HDTV 576p @50Hz                ",	GS_NONINTERLACED,	GS_MODE_DTV_576P,	GS_FRAME,	(u64)make_display_magic_number(	 575,	1279,	0,		1,		 64,	320),	0x00A9000002700005},
-	{  HDTV_VMODE,"HDTV 720p @60Hz                ",	GS_NONINTERLACED,	GS_MODE_DTV_720P,	GS_FRAME, 	(u64)make_display_magic_number(	 719,	1279,	1,		1,		 24,	302),	0x00AB400001400005},
-	{  HDTV_VMODE,"HDTV 1080i @60Hz               ",	GS_INTERLACED,		GS_MODE_DTV_1080I,	GS_FIELD, 	(u64)make_display_magic_number(	1079,	1919,	1,		2,		 48,	238),	0x0150E00201C00005},
-	{  HDTV_VMODE,"HDTV 1080i @60Hz Non Interlaced",	GS_INTERLACED,		GS_MODE_DTV_1080I,	GS_FRAME, 	(u64)make_display_magic_number(	1079,	1919,	0,		2,		 48,	238),	0x0150E00201C00005},
-	{  HDTV_VMODE,"HDTV 1080p @60Hz               ",	GS_NONINTERLACED,	GS_MODE_DTV_1080P,	GS_FRAME, 	(u64)make_display_magic_number(	1079,	1919,	1,		2,		 48,	238),	0x0150E00201C00005},
-}; //ends predef_vmode definition
-
-u32 predef_vmode_size = 	sizeof( predef_vmode ) / sizeof( predef_vmode[0] );
-
-#define DI2	DIntr
-#define EI2	EIntr
-
-_GSM_ENGINE_ int ee_kmode_enter2() {
-	u32 status, mask;
-
-	__asm__ volatile (
-		".set\tpush\n\t"		\
-		".set\tnoreorder\n\t"		\
-		"mfc0\t%0, $12\n\t"		\
-		"li\t%1, 0xffffffe7\n\t"	\
-		"and\t%0, %1\n\t"		\
-		"mtc0\t%0, $12\n\t"		\
-		"sync.p\n\t"
-		".set\tpop\n\t" : "=r" (status), "=r" (mask));
-
-	return status;
-}
-
-_GSM_ENGINE_ int ee_kmode_exit2() {
-	int status;
-
-	__asm__ volatile (
-		".set\tpush\n\t"		\
-		".set\tnoreorder\n\t"		\
-		"mfc0\t%0, $12\n\t"		\
-		"ori\t%0, 0x10\n\t"		\
-		"mtc0\t%0, $12\n\t"		\
-		"sync.p\n\t" \
-		".set\tpop\n\t" : "=r" (status));
-
-	return status;
-}
-
-_GSM_ENGINE_ void SetSyscall2(int number, void (*functionPtr)(void)) {
-	__asm__ __volatile__ (
-	".set noreorder\n"
-	".set noat\n"
-	"li $3, 0x74\n"
-    "add $4, $0, %0    \n"   // Specify the argument #1
-    "add $5, $0, %1    \n"   // Specify the argument #2
-   	"syscall\n"
-	"jr $31\n"
-	"nop\n"
-	".set at\n"
-	".set reorder\n"
-    :
-    : "r"( number ), "r"( functionPtr )
-    );
-}
-
-_GSM_ENGINE_ u32* GetROMSyscallVectorTableAddress(void) {
-	//Search for Syscall Table in ROM
-	u32 i;
-	u32 startaddr;
-	u32* ptr;
-	u32* addr;
-	startaddr = 0;
-	for (i = 0x1FF00000; i < 0x1FFFFFFF; i+= 4)
-	{
-		if ( *(u32*)(i + 0) == 0x40196800 )
-		{
-			if ( *(u32*)(i + 4) == 0x3C1A8001 )
-			{
-				startaddr = i - 8;
-				break;
-			}
-		}
-	}
-	ptr = (u32 *) (startaddr + 0x02F0);
-	addr = (u32*)((ptr[0] << 16) | (ptr[2] & 0xFFFF));
-	addr = (u32*)((u32)addr & 0x1fffffff);
-	addr = (u32*)((u32)addr + startaddr);
-	return addr;
-}
-
-_GSM_ENGINE_ void InitGSM(u32 interlace, u32 mode, u32 ffmd, u64 display, u64 syncv, u64 smode2, int dx_offset, int dy_offset, u8 skip_videos)
- {
-
-	u32* ROMSyscallTableAddress;
-
-	// Update GSM params
-	DI2();
-	ee_kmode_enter2();
-
-	Target_INTERLACE		= interlace;
-	Target_MODE				= mode;
-	Target_FFMD				= ffmd;
-	Target_DISPLAY1			= display;
-	Target_DISPLAY2			= display;
-	Target_SYNCV			= syncv;
-	Target_SMODE2			= smode2;
-	X_offset				= dx_offset;		// X-axis offset -> Use it only when automatic adaptations formulas don't fit into your needs
-	Y_offset				= dy_offset;		// Y-axis offset -> Use it only when automatic adaptations formulas dont't fit into your needs
-	skip_videos_fix			= skip_videos ^ 1;	// Skip Videos Fix ------------> 0 = On, 1 = Off ; Default = 0 = On
-	
-	automatic_adaptation	= 0;				// Automatic Adaptation -> 0 = On, 1 = Off ; Default = 0 = On
-	DISPLAY_fix				= 0;				// DISPLAYx Fix ---------> 0 = On, 1 = Off ; Default = 0 = On
-	SMODE2_fix				= 0;				// SMODE2 Fix -----------> 0 = On, 1 = Off ; Default = 0 = On
-	SYNCV_fix				= 0;				// SYNCV Fix ------------> 0 = On, 1 = Off ; Default = 0 = On
-
-	ee_kmode_exit2();
-	EI2();
-
-	// Hook SetGsCrt
-	ROMSyscallTableAddress = GetROMSyscallVectorTableAddress();
-	Old_SetGsCrt = (void*)ROMSyscallTableAddress[2];
-	SetSyscall2(2, &Hook_SetGsCrt);
-
-	// Remove all breakpoints (even when they aren't enabled)
-	__asm__ __volatile__ (
-	".set noreorder\n"
-	".set noat\n"
-	"li $k0, 0x8000\n"
-	"mtbpc $k0\n"			// All breakpoints off (BED = 1)
-	"sync.p\n"				// Await instruction completion
-	".set at\n"
-	".set reorder\n"
-	);
-
-	// Replace Core Debug Exception Handler (V_DEBUG handler) by GSHandler
-	DI2();
-	ee_kmode_enter2();
-	*(u32 *)0x80000100 = MAKE_J((int)GSHandler);
-	*(u32 *)0x80000104 = 0;
-	ee_kmode_exit2();
-	EI2();
-
-	SetVCommonHandler(8, (void *)0x80000280);	//TPIIG Fix
-
-}
-
-/*---------------------------------------------------------*/
-/* Disable Graphics Synthesizer Mode Selector (a.k.a. GSM) */
-/*---------------------------------------------------------*/
-static inline void DeInitGSM(void)
+struct GSMDestSetGsCrt
 {
-	//Search for Syscall Table in ROM
-	u32 i;
-	u32 KernelStart;
-	u32* Pointer;
-	u32* SyscallTable;
-	KernelStart = 0;
-	for (i = 0x1fc00000+0x300000; i < 0x1fc00000+0x3fffff; i+=4)
-	{
-		if ( *(u32*)(i+0) == 0x40196800 )
-		{
-			if ( *(u32*)(i+4) == 0x3c1a8001 )
-			{
-				KernelStart = i - 8;
-				break;
-			}
-		}
-	}
-	if (KernelStart == 0)
-	{
-		GS_BGCOLOUR = 0x00ffff;	// Yellow	
-		while (1) {;}
-	}
-	Pointer = (u32 *) (KernelStart + 0x2f0);
-	SyscallTable = (u32*)((Pointer[0] << 16) | (Pointer[2] & 0xFFFF));
-	SyscallTable = (u32*)((u32)SyscallTable & 0x1fffffff);
-	SyscallTable = (u32*)((u32)SyscallTable + KernelStart);
-	
-	DI();
-	ee_kmode_enter();
-	// Restore SetGsCrt (even when it isn't hooked)
-	SetSyscall(2, (void*)SyscallTable[2]);
-	// Remove all breakpoints (even when they aren't enabled)
-	__asm__ __volatile__ (
-	".set noreorder\n"
-	".set noat\n"
-	"li $k0, 0x8000\n"
-	"mtbpc $k0\n"			// All breakpoints off (BED = 1)
-	"sync.p\n"				// Await instruction completion
-	".set at\n"
-	".set reorder\n"
-	);
-	ee_kmode_exit();
-	EI();
+    s16 interlace;
+    s16 mode;
+    s16 ffmd;
+} __attribute__((packed));
+
+struct GSMDestGSRegs
+{
+    u64 pmode;
+    u64 smode1;
+    u64 smode2;
+    u64 srfsh;
+    u64 synch1;
+    u64 synch2;
+    u64 syncv;
+    u64 dispfb1;
+    u64 display1;
+    u64 dispfb2;
+    u64 display2;
+} __attribute__((packed));
+
+struct GSMFlags
+{
+    u32 dx_offset;
+    u32 dy_offset;
+    u8 ADAPTATION_fix;
+    u8 PMODE_fix;
+    u8 SMODE1_fix;
+    u8 SMODE2_fix;
+    u8 SRFSH_fix;
+    u8 SYNCH_fix;
+    u8 SYNCV_fix;
+    u8 DISPFB_fix;
+    u8 DISPLAY_fix;
+    u8 FIELD_fix;
+    u8 gs576P_param;
+} __attribute__((packed));
+
+extern struct GSMDestSetGsCrt GSMDestSetGsCrt;
+extern struct GSMDestGSRegs GSMDestGSRegs;
+extern struct GSMFlags GSMFlags;
+
+extern void Hook_SetGsCrt();
+extern void GSHandler();
+
+static unsigned int KSEG_backup[2]; // Copies of the original words at 0x80000100 and 0x80000104.
+
+/* Update GSM params */
+/*-------------------*/
+/*-------------------*/
+// Update parameters to be enforced by Hook_SetGsCrt syscall hook and GSHandler service routine functions
+void UpdateGSMParams(s16 interlace, s16 mode, s16 ffmd, u64 display, u64 syncv, u64 smode2, u32 dx_offset, u32 dy_offset, int k576p_fix, int kGsDxDyOffsetSupported, int FIELD_fix)
+{
+    unsigned int hvParam = GetGsVParam();
+    int gs_DH, gs_DW, gs_DY, gs_DX;
+
+    GSMDestSetGsCrt.interlace = interlace;
+    GSMDestSetGsCrt.mode = mode;
+    GSMDestSetGsCrt.ffmd = ffmd;
+
+    GSMDestGSRegs.smode2 = (u8)smode2;
+    GSMDestGSRegs.display1 = (u64)display;
+    GSMDestGSRegs.display2 = (u64)display;
+    GSMDestGSRegs.syncv = (u64)syncv;
+
+    GSMFlags.dx_offset = (u32)dx_offset; // X-axis offset -> Use it only when automatic adaptations formulas don't suffice
+    GSMFlags.dy_offset = (u32)dy_offset; // Y-axis offset -> Use it only when automatic adaptations formulas don't suffice
+    // 0 = Off, 1 = On
+    GSMFlags.ADAPTATION_fix = 1; // Default = 1 = On
+    GSMFlags.PMODE_fix = 0;      // Default = 0 = Off
+    GSMFlags.SMODE1_fix = 0;     // Default = 0 = Off
+    GSMFlags.SMODE2_fix = 1;     // Default = 1 = On
+    GSMFlags.SRFSH_fix = 0;      // Default = 0 = Off
+    GSMFlags.SYNCH_fix = 0;      // Default = 0 = Off
+    GSMFlags.SYNCV_fix = 0;      // Default = 0 = Off
+    GSMFlags.DISPFB_fix = 1;     // Default = 1 = On
+    GSMFlags.DISPLAY_fix = 1;    // Default = 1 = On
+    GSMFlags.FIELD_fix = (FIELD_fix ? (1 << 2) : 0);
+    GSMFlags.gs576P_param = (k576p_fix ? (1 << 1) : 0) | (hvParam & 1);
+
+    if (kGsDxDyOffsetSupported && (!(mode >= GS_MODE_NTSC && mode <= GS_MODE_PAL))) {
+        _GetGsDxDyOffset(mode, &gs_DX, &gs_DY, &gs_DW, &gs_DH);
+        GSMFlags.dx_offset += gs_DX;
+        GSMFlags.dy_offset += gs_DY;
+    }
 }
 
-//----------------------------------------------------------------------------
-int main(void)
-{   
-	// Other values: Value chosen by user (0-7)
-	int predef_vmode_idx = 3;
+/*------------------------------------------------------------------*/
+/* Replace SetGsCrt in kernel. (Graphics Synthesizer Mode Selector) */
+/*------------------------------------------------------------------*/
+static inline void Install_Hook_SetGsCrt(void)
+{
+    Old_SetGsCrt = GetSyscallHandler(__NR_SetGsCrt);
+    SetSyscall(__NR_SetGsCrt, Hook_SetGsCrt);
+}
 
-	//----------------------------------------------------------------------------
-	//---------- Start of coding stuff ----------
+/*-----------------------------------------------------------------*/
+/* Restore original SetGsCrt. (Graphics Synthesizer Mode Selector) */
+/*-----------------------------------------------------------------*/
+static inline void Remove_Hook_SetGsCrt(void)
+{
+    SetSyscall(__NR_SetGsCrt, Old_SetGsCrt);
+}
 
-	DeInitGSM();
+/*----------------------------------------------------------------------------------------------------*/
+/* Install Display Handler in place of the Core Debug Exception Handler (V_DEBUG handler)             */
+/* Exception Vector Address for Debug Level 2 Exception when Stadus.DEV bit is 0 (normal): 0x80000100 */
+/* 'Level 2' is a generalization of Error Level (from previous MIPS processors)                       */
+/* When this exception is recognized, control is transferred to the applicable service routine;       */
+/* in our case the service routine is 'GSHandler'!                                                    */
+/*----------------------------------------------------------------------------------------------------*/
+static void Install_GSHandler(void)
+{
+    DI();
+    ee_kmode_enter();
 
-	InitGSM(predef_vmode[predef_vmode_idx].interlace, \
-					predef_vmode[predef_vmode_idx].mode, \
-					predef_vmode[predef_vmode_idx].ffmd, \
-					predef_vmode[predef_vmode_idx].display, \
-					predef_vmode[predef_vmode_idx].syncv, \
-					((predef_vmode[predef_vmode_idx].ffmd)<<1)|(predef_vmode[predef_vmode_idx].interlace), \
-					0, \
-					0, \
-					0); 
-					//XOffset
-					//YOffset
-					//Skip videos
+    KSEG_backup[0] = *(volatile u32 *)0x80000100;
+    KSEG_backup[1] = *(volatile u32 *)0x80000104;
 
-	// Call sceSetGsCrt syscall in order to "bite" the new video mode
-	__asm__ __volatile__(
-		"li  $3, 0x02\n"   // Syscall Number = 2 (sceGsCrt)
-		"add $4, $0, %0\n"   // interlace
-		"add $5, $0, %1\n"   // mode
-		"add $6, $0, %2\n"   // ffmd
+    *(volatile u32 *)0x80000100 = MAKE_J((int)GSHandler);
+    *(volatile u32 *)0x80000104 = NOP;
+    ee_kmode_exit();
 
-		"syscall\n"			// Perform the syscall
-		"nop\n"				// nop for Branch delay slot
+    // Set Data Address Write Breakpoint
+    // Trap writes to GS registers, so as to control their values
+    Enable_GSBreakpoint();
+    EI();
 
-		:
-		:	"r" (predef_vmode[predef_vmode_idx].interlace), \
-			"r" (predef_vmode[predef_vmode_idx].mode), \
-			"r" (predef_vmode[predef_vmode_idx].ffmd)
-	);
+    FlushCache(0);
+    FlushCache(2);
+}
 
-	// Exit to PS2 Browser
-	Exit(0);
+static void Remove_GSHandler(void)
+{
+    DI();
 
-	return 0;
+    Disable_GSBreakpoint();
+
+    // Restore the original stuff at the level 2 exception handler.
+    ee_kmode_enter();
+    *(volatile u32 *)0x80000100 = KSEG_backup[0];
+    *(volatile u32 *)0x80000104 = KSEG_backup[1];
+    ee_kmode_exit();
+    EI();
+
+    FlushCache(0);
+    FlushCache(2);
+}
+
+/*-------------------------------------------*/
+/* Enable Graphics Synthesizer Mode Selector */
+/*-------------------------------------------*/
+void EnableGSM(void)
+{
+    // Install Hook SetGsCrt
+    Install_Hook_SetGsCrt();
+    // Install Display Handler
+    Install_GSHandler();
+}
+
+/*--------------------------------------------*/
+/* Disable Graphics Synthesizer Mode Selector */
+/*--------------------------------------------*/
+void DisableGSM(void)
+{
+    // Remove Hook SetGsCrt
+    Remove_Hook_SetGsCrt();
+    // Remove Display Handler
+    Remove_GSHandler();
+}
+
+/*--------------------------------------------*/
+/* Set up the DVE for 576P mode               */
+/*--------------------------------------------*/
+void setdve_576P(void)
+{ // The parameters are exactly the same as the 480P mode's. Regardless of the model, GS revision or region.
+    dve_prepare_bus();
+
+    dve_set_reg(0x77, 0x11);
+    dve_set_reg(0x93, 0x01);
+    dve_set_reg(0x91, 0x02);
 }
